@@ -11,6 +11,16 @@
  * Now: one env var (VITE_API_URL), one axios instance, imported everywhere.
  * Falls back to localhost:8000 for local dev so `npm run dev` still works
  * with zero config.
+ *
+ * TIMEOUT FIX: `api` (30s) is fine for cheap, fast endpoints (/health,
+ * /market-data, /news), but /analyze and /chat load or use heavy
+ * transformer models (FinBERT, distilgpt2) on the backend. On Render's
+ * free tier, a cold instance can take well over 30s just to wake up and
+ * load those models the first time, so every /analyze call was hitting
+ * ECONNABORTED before the backend ever got to respond — even once the
+ * backend itself finished successfully seconds later. `slowApi` gives
+ * those two endpoints a much longer budget so the request actually has a
+ * chance to complete.
  */
 import axios from "axios";
 
@@ -19,6 +29,13 @@ export const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:80
 export const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
+});
+
+// Use this instance for /analyze and /chat specifically — the two routes
+// that can trigger a slow, cold heavy-model load on the backend.
+export const slowApi = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 120000, // 2 minutes — enough headroom for a cold Render wake + model load
 });
 
 // Central error normalizer so every component gets a consistent, human
