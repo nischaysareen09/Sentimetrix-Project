@@ -4,27 +4,51 @@ rag_engine.py
 Single RAG module (replaces the old duplicated rag_engine.py + rag_retriever.py,
 which held two different, overlapping rule lists — only one of which was
 actually wired into the app). This is now the only source of expert rules.
+
+MEMORY NOTE (Aug 2026): this used to try loading the real sentence-transformers
+MiniLM model ('all-MiniLM-L6-v2') at import time, falling back to the
+deterministic OfflineHashEmbedder only if that failed (e.g. no network to
+huggingface.co). That eager MiniLM load ran as a side effect of
+`import rag_engine` — before FastAPI's own startup hook even fires, i.e.
+before any of main.py's "lazy load the heavy stuff" logic gets a chance to
+run — and was one of several transformer models competing for the 512MB
+ceiling on Render's free tier, contributing directly to the /analyze
+OOM crash-loop (process silently dying mid-request, no traceback, then
+auto-restarting).
+
+Since this RAG step only compares a fixed, short list of expert-rule
+strings for retrieval (not open-ended semantic search over arbitrary
+text), the hashing-based OfflineHashEmbedder's lower semantic fidelity is
+an acceptable trade for a large, guaranteed memory savings — no torch
+model load at all for this module. Set USE_REAL_EMBEDDER=1 in the
+environment to opt back into MiniLM (e.g. after upgrading off the free
+tier); everything else in this file is unchanged either way.
 """
 
+import os
 import faiss
 import numpy as np
 
-# Prefer the real sentence-transformers MiniLM model (used in production,
-# where huggingface.co is reachable). This sandbox has no route to
-# huggingface.co, so fall back to a deterministic offline embedder purely
-# so the training/eval pipeline can be built and validated end-to-end.
-# See offline_embedder.py for details — re-run training with real network
-# access (train_real_data.py) before treating results as final.
-try:
-    from sentence_transformers import SentenceTransformer
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
-except Exception as e:
-    print(f"[rag_engine] Could not load real MiniLM embedder ({e}); using offline fallback.")
+if os.environ.get("USE_REAL_EMBEDDER") == "1":
+    try:
+        from sentence_transformers import SentenceTransformer
+        embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        print("[rag_engine] USE_REAL_EMBEDDER=1 — using real MiniLM embedder.")
+    except Exception as e:
+        print(f"[rag_engine] Could not load real MiniLM embedder ({e}); using offline fallback.")
+        try:
+            from .offline_embedder import OfflineHashEmbedder
+        except ImportError:
+            from offline_embedder import OfflineHashEmbedder
+        embedder = OfflineHashEmbedder()
+else:
     try:
         from .offline_embedder import OfflineHashEmbedder
     except ImportError:
         from offline_embedder import OfflineHashEmbedder
     embedder = OfflineHashEmbedder()
+    print("[rag_engine] Using OfflineHashEmbedder (default, low-memory). "
+          "Set USE_REAL_EMBEDDER=1 to use MiniLM instead.")
 
 # Combined + de-duplicated expert knowledge base from both old files.
 # Expand this list over time as you add more technical-analysis heuristics.
