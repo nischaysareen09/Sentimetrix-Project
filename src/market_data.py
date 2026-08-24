@@ -199,16 +199,42 @@ def _fetch_live_uncached(ticker: str):
     if df.empty:
         return pd.DataFrame(), {}, ticker
 
+    # Indicators are computed from the price df we already have — this
+    # doesn't call Yahoo again, so it's not subject to rate limiting, but
+    # keep it guarded independently from the KPI lookup below so a failure
+    # here is diagnosable on its own rather than lumped in with a network
+    # error.
     try:
         df = compute_indicators(df)
-        info = ticker_obj.info
-        kpis = {
-            "Market Cap": info.get("marketCap", "N/A"),
-            "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
-        }
     except Exception as e:
-        print(f"[market_data] feature engineering error for '{resolved_ticker}': {e}")
+        print(f"[market_data] indicator computation error for '{resolved_ticker}': {e}")
         return pd.DataFrame(), {}, ticker
+
+    # KPIs (Market Cap, 52W High) come from a SEPARATE Yahoo endpoint
+    # (ticker.info / quoteSummary), independent of the history() call above.
+    # BUG FIXED: this used to be wrapped in the same try/except as
+    # compute_indicators, so if `.info` got rate-limited, the except block
+    # discarded the price data we'd *already successfully fetched* and
+    # returned an empty dataframe — turning a minor "no KPIs" problem into
+    # a total "ticker not found" failure. KPIs are supplementary display
+    # info, not required for /analyze's actual prediction, so a failure
+    # here should degrade gracefully (KPIs show "N/A") instead of failing
+    # the whole request. Retried once too, since it's the same kind of
+    # transient rate limit as history().
+    kpis = {"Market Cap": "N/A", "52W High": "N/A"}
+    for attempt in range(2):
+        try:
+            info = ticker_obj.info
+            kpis = {
+                "Market Cap": info.get("marketCap", "N/A"),
+                "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
+            }
+            break
+        except Exception as e:
+            print(f"[market_data] KPI lookup error for '{resolved_ticker}' "
+                  f"(attempt {attempt + 1}/2): {e}")
+            if attempt == 0:
+                time.sleep(1.5)
 
     return df.dropna(), kpis, resolved_ticker
 
