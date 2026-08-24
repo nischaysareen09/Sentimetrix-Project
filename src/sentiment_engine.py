@@ -33,7 +33,13 @@ class SentimentEngine:
         model_name = "ProsusAI/finbert"
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        # fp16 weights: FinBERT is ~440MB in fp32, ~220MB in fp16. CPU
+        # inference in fp16 is slightly slower per-call than fp32, but on
+        # a 512MB instance the memory headroom matters far more than a few
+        # extra milliseconds per request.
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, torch_dtype=torch.float16
+        )
         self.model.to(self.device)
         self.model.eval()
 
@@ -59,7 +65,9 @@ class SentimentEngine:
             with torch.no_grad():
                 logits = self.model(**inputs).logits
 
-            probs = torch.softmax(logits, dim=-1)[0]
+            # Softmax in fp32 regardless of model dtype — fp16 softmax can
+            # lose precision right at the decision boundary between classes.
+            probs = torch.softmax(logits.float(), dim=-1)[0]
             pred_id = int(torch.argmax(probs).item())
             label = self.id2label[pred_id]
             score = float(probs[pred_id].item())
