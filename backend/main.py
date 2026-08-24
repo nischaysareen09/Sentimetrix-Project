@@ -325,6 +325,11 @@ def analyze_stock(req: AnalysisRequest):
 
     try:
         print("Analyze request:", req.ticker)
+        try:
+            import resource
+            print(f"[mem] RSS at analyze start: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
+        except Exception:
+            pass
 
         df, _, resolved_ticker = get_alpha_live_data(req.ticker)
 
@@ -347,7 +352,17 @@ def analyze_stock(req: AnalysisRequest):
             raise HTTPException(status_code=500, detail="Scaler not loaded")
 
         pred_class, conf, weights = predict_signal(model, df, rules, embedder, scaler)
+        try:
+            import resource
+            print(f"[mem] RSS before sentiment: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
+        except Exception:
+            pass
         sentiment = get_sentiment_engine().analyze(news_context)
+        try:
+            import resource
+            print(f"[mem] RSS after sentiment: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
+        except Exception:
+            pass
 
         # BUG FIXED: the model's attention weights over the retrieved rules
         # were computed but never included in the response, so the
