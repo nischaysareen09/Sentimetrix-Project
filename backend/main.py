@@ -88,10 +88,21 @@ def load_lightweight_assets():
     """
     Only the cheap assets load at startup: the TCN weights, the scaler,
     and the FAISS rule index. The heavy Transformer models (LLM + sentiment)
-    are loaded lazily on first use (see get_llm()/get_sentiment_engine()
-    below) so the server can start accepting requests immediately instead
-    of stalling (or OOM-ing on low-memory hosts like Render's free tier)
-    while every model loads up front.
+    load lazily on first use (see get_llm()/get_sentiment_engine() below).
+
+    REVERTED eager-loading here: an earlier version of this function loaded
+    FinBERT + distilgpt2 eagerly at startup too, to avoid a slow first
+    /analyze request timing out on the frontend. That traded a slow first
+    request for something worse — on Render's free 512MB instance, loading
+    torch + transformers + sentence-transformers + faiss + FinBERT +
+    distilgpt2 all at once during boot exceeded the memory limit and got
+    the instance OOM-killed and restarted (Render's own "exceeded its
+    memory limit" alert). Back to lazy loading: only one heavy model loads
+    into memory at a time, as it's actually needed. The frontend's longer
+    timeout on /analyze and /chat (see src/lib/api.js's `slowApi`, 120s)
+    is what should absorb the slow-first-load cost instead — that's a
+    UX trade-off, not a stability risk, unlike loading everything at once
+    on a memory-constrained instance.
     """
     global model, scaler, faiss_index
     try:
