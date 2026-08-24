@@ -20,6 +20,26 @@ import requests
 import yfinance as yf
 
 # ---------------------------------------------------------------------------
+# Shared HTTP session for yfinance
+# ---------------------------------------------------------------------------
+# BUG FIXED: yfinance's default requests session sends a generic/no
+# User-Agent, and Yahoo aggressively rate-limits traffic from cloud hosting
+# IP ranges (Render, AWS, GCP, etc.) that looks non-browser-like — every
+# call was failing with "Too Many Requests. Rate limited." A shared session
+# with a real browser User-Agent (and keep-alive reuse instead of a fresh
+# TCP/TLS handshake per call) is the standard yfinance workaround and
+# meaningfully cuts down how often Yahoo blocks these requests. Not a
+# guarantee — Yahoo can still rate-limit a session that calls it too
+# often — but combined with the TTL cache below it's a big improvement.
+_YF_SESSION = requests.Session()
+_YF_SESSION.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+})
+
+# ---------------------------------------------------------------------------
 # Indicator computation (shared by training + serving)
 # ---------------------------------------------------------------------------
 
@@ -86,9 +106,8 @@ def add_training_labels(df: pd.DataFrame, up_thresh: float = 0.025, down_thresh:
 def search_ticker(query: str):
     """Resolve a free-text query to a Yahoo Finance ticker symbol."""
     url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
-    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(url, headers=headers, timeout=5)
+        r = _YF_SESSION.get(url, timeout=5)
         data = r.json()
         if data.get("quotes"):
             return data["quotes"][0]["symbol"]
@@ -105,7 +124,9 @@ def search_ticker(query: str):
 # This is a manual TTL cache instead: cheap, no extra dependency.
 
 _LIVE_CACHE: dict[str, tuple[float, tuple]] = {}
-_LIVE_CACHE_TTL_SECONDS = 5 * 60  # refresh at most every 5 minutes
+_LIVE_CACHE_TTL_SECONDS = 15 * 60  # widened from 5 to 15 min — fewer Yahoo calls
+                                    # overall means fewer opportunities to get
+                                    # rate-limited in the first place.
 
 
 def get_alpha_live_data(ticker: str):
@@ -134,18 +155,43 @@ def get_alpha_live_data(ticker: str):
 
 
 def _fetch_live_uncached(ticker: str):
+    """
+    Fetches one ticker via yfinance, using the shared browser-UA session
+    and a short retry-with-backoff for transient rate limits — Yahoo's
+    "Too Many Requests" is often momentary, and a single retry a couple
+    seconds later frequently succeeds where the first call didn't.
+    """
     resolved_ticker = ticker
+
+    def _history(tk_obj, retries=2, base_delay=1.5):
+        last_err = None
+        for attempt in range(retries + 1):
+            try:
+                return tk_obj.history(period="max", interval="1d", auto_adjust=True)
+            except Exception as e:
+                last_err = e
+                msg = str(e)
+                if "Too Many Requests" in msg or "Rate limited" in msg:
+                    if attempt < retries:
+                        delay = base_delay * (2 ** attempt)
+                        print(f"[market_data] Rate limited, retrying in {delay:.1f}s "
+                              f"(attempt {attempt + 1}/{retries})...")
+                        time.sleep(delay)
+                        continue
+                raise
+        raise last_err
+
     try:
-        ticker_obj = yf.Ticker(resolved_ticker)
-        df = ticker_obj.history(period="max", interval="1d", auto_adjust=True)
+        ticker_obj = yf.Ticker(resolved_ticker, session=_YF_SESSION)
+        df = _history(ticker_obj)
 
         if df.empty:
             found = search_ticker(ticker)
             if found and found != ticker:
                 print(f"[market_data] Resolving '{ticker}' -> '{found}'")
                 resolved_ticker = found
-                ticker_obj = yf.Ticker(resolved_ticker)
-                df = ticker_obj.history(period="max", interval="1d", auto_adjust=True)
+                ticker_obj = yf.Ticker(resolved_ticker, session=_YF_SESSION)
+                df = _history(ticker_obj)
     except Exception as e:
         print(f"[market_data] yfinance error for '{ticker}': {e}")
         return pd.DataFrame(), {}, ticker
@@ -174,7 +220,7 @@ def _fetch_live_uncached(ticker: str):
 def fetch_training_data(ticker: str, start_date: str = "2020-01-01") -> pd.DataFrame:
     """Fetches historical data + indicators + labels for model training."""
     try:
-        ticker_obj = yf.Ticker(ticker)
+        ticker_obj = yf.Ticker(ticker, session=_YF_SESSION)
         df = ticker_obj.history(start=start_date, auto_adjust=True)
     except Exception as e:
         print(f"[market_data] training fetch error for '{ticker}': {e}")
