@@ -1,0 +1,58 @@
+{
+  "data_source": "synthetic_regime_switching_simulator (see src/synthetic_market.py)",
+  "note": "Trained on simulated data (this training environment has no live market data access). Re-run train_real_data.py locally against live Yahoo Finance history for production metrics.",
+  "test_accuracy": 0.49623456790123455,
+  "test_macro_precision": 0.47260603799324113,
+  "test_macro_recall": 0.49668579288084175,
+  "test_macro_f1": 0.4615815477417072,
+  "per_class": {
+    "Sell": {
+      "precision": 0.5437300654691959,
+      "recall": 0.6146110056925996,
+      "f1-score": 0.5770018704907811,
+      "support": 5270.0
+    },
+    "Hold": {
+      "precision": 0.38071968014215907,
+      "recall": 0.15762368953466985,
+      "f1-score": 0.2229448491155047,
+      "support": 5437.0
+    },
+    "Buy": {
+      "precision": 0.4933683683683684,
+      "recall": 0.7178226834152558,
+      "f1-score": 0.5847979236188358,
+      "support": 5493.0
+    }
+  },
+  "confusion_matrix": {
+    "labels": [
+      "Sell",
+      "Hold",
+      "Buy"
+    ],
+    "matrix": [
+      [
+        3239,
+        722,
+        1309
+      ],
+      [
+        1840,
+        857,
+        2740
+      ],
+      [
+        878,
+        672,
+        3943
+      ]
+    ]
+  },
+  "n_train_sequences": 74400,
+  "n_val_sequences": 16200,
+  "n_test_sequences": 16200,
+  "n_assets": 60,
+  "seq_len": 20,
+  "feature_dim": 17
+}

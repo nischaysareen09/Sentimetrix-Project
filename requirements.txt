@@ -1,0 +1,39 @@
+# Sentimetrix-TCN backend dependencies
+#
+# IMPORTANT for Render / any low-memory host:
+# The default `torch` wheel from PyPI pulls in full CUDA support (~2GB+),
+# which is unnecessary on a CPU-only host and can blow past free-tier build
+# time/disk limits. Install torch's CPU-only build FIRST, then the rest:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+#
+# (If you're using Render's dashboard, put the two lines above in the
+# "Build Command" field instead of the default `pip install -r requirements.txt`.)
+
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+pydantic==2.9.*
+python-multipart==0.0.*
+
+pandas==2.2.*
+numpy==1.26.*
+yfinance==0.2.*
+ta==0.11.*
+requests==2.32.*
+feedparser==6.0.*
+scikit-learn==1.5.*
+joblib==1.4.*
+
+sentence-transformers==3.2.*
+faiss-cpu==1.9.*
+transformers==4.46.*
+accelerate==1.1.*
+
+# torch installed separately above (CPU wheel) — leave unpinned here so it
+# doesn't conflict with the CPU-only install command
+torch
+
+# Only needed if you also run the legacy Streamlit dashboard (app.py)
+streamlit==1.39.*
+plotly==5.24.*
