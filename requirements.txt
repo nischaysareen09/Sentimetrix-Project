@@ -25,16 +25,10 @@ feedparser==6.0.*
 scikit-learn==1.5.*
 joblib==1.4.*
 
-# sentence-transformers (MiniLM) is now OPTIONAL — rag_engine.py defaults
-# to a zero-dependency hash-based embedder to save memory on the Render
-# free tier. Only install this if you set USE_REAL_EMBEDDER=1 (e.g. after
-# upgrading off the 512MB tier):
-#   pip install sentence-transformers==3.2.*
+sentence-transformers==3.2.*
 faiss-cpu==1.9.*
 transformers==4.46.*
-# accelerate removed: only needed for large-model loading tricks
-# (device_map="auto", multi-GPU sharding, etc.) that this app's
-# AutoModelForSequenceClassification.from_pretrained() call doesn't use.
+accelerate==1.1.*
 
 # torch installed separately above (CPU wheel) — leave unpinned here so it
 # doesn't conflict with the CPU-only install command
