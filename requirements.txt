@@ -26,9 +26,15 @@ scikit-learn==1.5.*
 joblib==1.4.*
 
 sentence-transformers==3.2.*
-faiss-cpu==1.9.*
+faiss-cpu==1.15.0
 transformers==4.46.*
 accelerate==1.1.*
+huggingface_hub==0.26.*  # sentiment_engine.py calls HF's Inference API
+                          # directly via InferenceClient — no local FinBERT
+                          # load, avoids OOM on low-memory hosts.
+                          # transformers/torch are still needed here for
+                          # sentence-transformers' local MiniLM embedder
+                          # (RAG) and for the TCN price model itself.
 
 # torch installed separately above (CPU wheel) — leave unpinned here so it
 # doesn't conflict with the CPU-only install command

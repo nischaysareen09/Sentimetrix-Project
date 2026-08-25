@@ -1,78 +1,70 @@
-import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import os
+from huggingface_hub import InferenceClient
 
 
 class SentimentEngine:
     def __init__(self):
         """
-        Initializes a finance-domain sentiment model (FinBERT), loaded via
-        direct AutoTokenizer/AutoModelForSequenceClassification classes
-        instead of transformers' `pipeline("sentiment-analysis", ...)`
-        wrapper.
+        Finance-domain sentiment via Hugging Face's free Inference API,
+        instead of loading FinBERT locally.
 
-        WHY NOT `pipeline()`: it's a convenience wrapper that keeps extra
-        Python-level bookkeeping and preprocessing/postprocessing machinery
-        alive for the object's lifetime on top of the model weights
-        themselves. On a memory-constrained host (Render free tier,
-        512MB) that overhead — stacked on top of the TCN model, FAISS
-        index, and everything else already resident — was enough to push
-        the process over the limit and get it OOM-killed mid-request (see:
-        /analyze crash-loop, Aug 2026). Loading the tokenizer + model
-        directly and running inference in a plain torch.no_grad() block
-        does the identical computation with a smaller resident footprint.
+        CHANGED: this used to load ProsusAI/finbert in-process via
+        transformers.pipeline(), which needs ~440MB+ of RAM on top of an
+        already-loaded torch/transformers/sentence-transformers/faiss
+        stack — enough to OOM-crash a 512MB Render free-tier instance on
+        the first /analyze call (see main.py history). Hugging Face's
+        Inference API runs the same FinBERT model on THEIR servers; we
+        just send text over HTTP and get a label/score back. This removes
+        FinBERT's memory footprint from our process entirely, at the cost
+        of a network call per request (and the free tier's own rate
+        limits — fine for a demo/portfolio app, not for high production
+        traffic).
 
-        NOTE: FinBERT is trained specifically on financial text (analyst
-        reports, earnings calls), unlike a generic SST-2 sentiment model
-        which tends to misread routine financial vocabulary ("stumble",
-        "misses", "drop") as broadly negative. That reasoning is unchanged
-        from the previous version of this file — only the loading
-        mechanism changed, not the model choice.
+        Requires an HF_TOKEN environment variable (a free Hugging Face
+        access token, "read" scope is enough — created at
+        https://huggingface.co/settings/tokens, set as a Render
+        environment variable / secret). This does NOT require a paid
+        plan; that restriction only applies to hosting Spaces (Docker/
+        Gradio), not to calling the Inference API.
+
+        NOTE on model choice (unchanged from the original local-FinBERT
+        version): financial headlines are full of words that read as
+        negative in everyday English ("stumble", "misses", "drop",
+        "volatility") even when describing routine market activity — a
+        general-purpose sentiment model tends to misclassify almost
+        everything as NEGATIVE regardless of actual financial meaning.
+        FinBERT is trained specifically on financial text and doesn't
+        have that bias, so we still use it here — just remotely instead
+        of locally.
         """
-        print("Loading Sentiment Engine (FinBERT, direct model load — no pipeline)...")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        model_name = "ProsusAI/finbert"
-
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        # fp16 weights: FinBERT is ~440MB in fp32, ~220MB in fp16. CPU
-        # inference in fp16 is slightly slower per-call than fp32, but on
-        # a 512MB instance the memory headroom matters far more than a few
-        # extra milliseconds per request.
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, torch_dtype=torch.float16
-        )
-        self.model.to(self.device)
-        self.model.eval()
-
-        # FinBERT's own config already maps id -> label
-        # ('positive'/'negative'/'neutral'), so no need to hardcode it here.
-        self.id2label = self.model.config.id2label
-        print("Sentiment Engine Loaded.")
+        print("Initializing Sentiment Engine (FinBERT via HF Inference API)...")
+        token = os.environ.get("HF_TOKEN")
+        if not token:
+            print(
+                "WARNING: HF_TOKEN environment variable not set. "
+                "Sentiment analysis will fail and fall back to NEUTRAL for "
+                "every request until this is set (see Render/host env vars)."
+            )
+        self.client = InferenceClient(provider="hf-inference", api_key=token)
+        self.model = "ProsusAI/finbert"
+        print("Sentiment Engine ready (remote).")
 
     def analyze(self, text):
         """Returns {'label': 'POSITIVE'|'NEGATIVE'|'NEUTRAL', 'score': float}.
 
-        BUG FIX CARRIED OVER: FinBERT natively returns lowercase labels
-        ('positive'/'negative'/'neutral'), but the frontend
-        (SentimentPanel.jsx) only ever matches uppercase. Normalizing to
-        uppercase here keeps that contract unambiguous for any consumer.
+        BUG FIXED (carried over from the local-FinBERT version): FinBERT
+        natively returns lowercase labels ('positive'/'negative'/
+        'neutral'), but the frontend (SentimentPanel.jsx) only ever
+        matched uppercase. Normalizing to uppercase here keeps that fix
+        intact regardless of where the model actually runs.
         """
         try:
-            inputs = self.tokenizer(
-                text, return_tensors="pt", truncation=True, max_length=512
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            with torch.no_grad():
-                logits = self.model(**inputs).logits
-
-            # Softmax in fp32 regardless of model dtype — fp16 softmax can
-            # lose precision right at the decision boundary between classes.
-            probs = torch.softmax(logits.float(), dim=-1)[0]
-            pred_id = int(torch.argmax(probs).item())
-            label = self.id2label[pred_id]
-            score = float(probs[pred_id].item())
-
-            return {"label": str(label).upper(), "score": score}
+            results = self.client.text_classification(text, model=self.model)
+            top = results[0]  # highest-scoring label
+            return {
+                "label": str(top.label).upper(),
+                "score": float(top.score),
+            }
         except Exception as e:
-            print(f"Sentiment Error: {e}")
+            print(f"Sentiment Error (HF Inference API): {e}")
             return {"label": "NEUTRAL", "score": 0.5}
