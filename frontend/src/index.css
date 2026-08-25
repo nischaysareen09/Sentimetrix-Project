@@ -1,54 +1,15 @@
 @import "tailwindcss";
 
 /*
-  Sentimetrix-TCN design tokens — TWO themes sharing one variable
-  contract, switched via [data-theme] on <html> (see lib/theme.jsx).
-
-  LIGHT (default): consumer-fintech look inspired by Tickertape/
-  Investing.com — white cards, blue accent, green/red gain-loss badges,
-  sans-serif throughout, soft shadows, rounded corners. This is what most
-  users see by default.
-
-  DARK: the original "amber terminal" identity — CRT-heritage amber
-  accent, monospace data grid, hairline borders, scanline texture.
-  Available via the theme toggle for anyone who wants that look.
-
-  Components branch their structural classes (radius, shadow, font,
-  spacing) on `theme` from useTheme(), but both themes read from the same
-  --color-* variable names so a lot of styling doesn't need branching at
-  all — just the values change.
+  Sentimetrix-TCN design tokens -- "amber terminal" identity, dark-only.
+  A light theme + toggle used to exist here but was removed to cut
+  frontend complexity and bundle size while chasing a backend memory
+  issue -- this app is dark-mode-only now, no runtime theme branching.
 */
 @theme {
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
-  --font-sans: "Inter", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
 
-  /* LIGHT THEME (default values) */
-  --color-void: #f5f7fa;
-  --color-panel: #ffffff;
-  --color-panel-raised: #ffffff;
-  --color-hairline: #e4e7ec;
-  --color-hairline-bright: #d0d5dd;
-
-  --color-amber: #2563eb;
-  --color-amber-dim: #dbeafe;
-  --color-amber-glow: rgba(37, 99, 235, 0.18);
-
-  --color-term-green: #16a34a;
-  --color-term-green-dim: #dcfce7;
-  --color-term-red: #dc2626;
-  --color-term-red-dim: #fee2e2;
-  --color-term-cyan: #0891b2;
-
-  --color-text-primary: #101828;
-  --color-text-dim: #667085;
-  --color-text-faint: #98a2b3;
-
-  --radius-card: 12px;
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
-}
-
-/* DARK THEME override — the original amber terminal palette */
-[data-theme="dark"] {
   --color-void: #0a0a0d;
   --color-panel: #14151a;
   --color-panel-raised: #1a1c23;
@@ -78,11 +39,8 @@ body {
   color: var(--color-text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Signature scanline texture — dark theme only, applied conditionally by
-   components (SignalReadout only adds this class when theme === 'dark'). */
 .scanlines {
   position: relative;
   overflow: hidden;
@@ -121,11 +79,9 @@ body {
 
 .term-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 .term-scroll::-webkit-scrollbar-track { background: transparent; }
-.term-scroll::-webkit-scrollbar-thumb { background: var(--color-hairline-bright); border-radius: 3px; }
+.term-scroll::-webkit-scrollbar-thumb { background: var(--color-hairline-bright); border-radius: 0; }
 
 .tabular {
   font-variant-numeric: tabular-nums;
-}
-[data-theme="dark"] .tabular {
   font-family: var(--font-mono);
 }

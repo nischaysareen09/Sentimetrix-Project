@@ -28,7 +28,6 @@ sys.path.append(PROJECT_ROOT)
 from src.market_data import get_alpha_live_data, search_ticker
 from src.rag_engine import build_research_index, retrieve_alpha_context, embedder
 from src.model_engine import SentimetrixTCN, predict_signal
-from src.intelligence_engine import IntelligenceEngine
 from src.sentiment_engine import SentimentEngine
 from src.news_engine import NewsEngine
 
@@ -88,21 +87,10 @@ def load_lightweight_assets():
     """
     Only the cheap assets load at startup: the TCN weights, the scaler,
     and the FAISS rule index. The heavy Transformer models (LLM + sentiment)
-    load lazily on first use (see get_llm()/get_sentiment_engine() below).
-
-    REVERTED eager-loading here: an earlier version of this function loaded
-    FinBERT + distilgpt2 eagerly at startup too, to avoid a slow first
-    /analyze request timing out on the frontend. That traded a slow first
-    request for something worse — on Render's free 512MB instance, loading
-    torch + transformers + sentence-transformers + faiss + FinBERT +
-    distilgpt2 all at once during boot exceeded the memory limit and got
-    the instance OOM-killed and restarted (Render's own "exceeded its
-    memory limit" alert). Back to lazy loading: only one heavy model loads
-    into memory at a time, as it's actually needed. The frontend's longer
-    timeout on /analyze and /chat (see src/lib/api.js's `slowApi`, 120s)
-    is what should absorb the slow-first-load cost instead — that's a
-    UX trade-off, not a stability risk, unlike loading everything at once
-    on a memory-constrained instance.
+    are loaded lazily on first use (see get_sentiment_engine()
+    below) so the server can start accepting requests immediately instead
+    of stalling (or OOM-ing on low-memory hosts like Render's free tier)
+    while every model loads up front.
     """
     global model, scaler, faiss_index
     try:
@@ -176,16 +164,13 @@ def load_lightweight_assets():
 # ---------------------------------------------------------------------------
 # Heavy assets: lazy singletons, loaded on first use
 # ---------------------------------------------------------------------------
-_llm = None
+# AI ANALYST REMOVED: distilgpt2 (via IntelligenceEngine) added real memory
+# weight on Render's free 512MB instance for a feature that wasn't
+# essential -- cutting it gives FinBERT (still used by /analyze) more
+# headroom. If /analyze still OOMs after this, FinBERT itself is the next
+# thing to address (e.g. swap for a smaller sentiment model).
 _sentiment_engine = None
 _news_engine = None
-
-
-def get_llm() -> IntelligenceEngine:
-    global _llm
-    if _llm is None:
-        _llm = IntelligenceEngine()
-    return _llm
 
 
 def get_sentiment_engine() -> SentimentEngine:
@@ -210,13 +195,6 @@ class AnalysisRequest(BaseModel):
     news_context: str | None = None
 
 
-class ChatRequest(BaseModel):
-    ticker: str
-    query: str
-    context: str
-    signal: int
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -236,7 +214,6 @@ def health_check():
         "tcn_model": model is not None,
         "scaler": scaler is not None,
         "rag_index": faiss_index is not None,
-        "llm_loaded": _llm is not None,           # lazy — False until first /chat call
         "sentiment_loaded": _sentiment_engine is not None,  # lazy — False until first /analyze call
         "news_engine_loaded": _news_engine is not None,
     }
@@ -325,11 +302,6 @@ def analyze_stock(req: AnalysisRequest):
 
     try:
         print("Analyze request:", req.ticker)
-        try:
-            import resource
-            print(f"[mem] RSS at analyze start: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
-        except Exception:
-            pass
 
         df, _, resolved_ticker = get_alpha_live_data(req.ticker)
 
@@ -352,17 +324,7 @@ def analyze_stock(req: AnalysisRequest):
             raise HTTPException(status_code=500, detail="Scaler not loaded")
 
         pred_class, conf, weights = predict_signal(model, df, rules, embedder, scaler)
-        try:
-            import resource
-            print(f"[mem] RSS before sentiment: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
-        except Exception:
-            pass
         sentiment = get_sentiment_engine().analyze(news_context)
-        try:
-            import resource
-            print(f"[mem] RSS after sentiment: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
-        except Exception:
-            pass
 
         # BUG FIXED: the model's attention weights over the retrieved rules
         # were computed but never included in the response, so the
@@ -386,21 +348,6 @@ def analyze_stock(req: AnalysisRequest):
     except Exception as e:
         print("ANALYZE ERROR:", e)
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/chat")
-def chat_analyst(req: ChatRequest):
-    try:
-        response = get_llm().generate_analysis(
-            context_rules=[req.context],
-            technical_signal=req.signal,
-            ticker=req.ticker,
-            user_query=req.query,
-        )
-        return {"response": response}
-    except Exception as e:
-        print("CHAT ERROR:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
