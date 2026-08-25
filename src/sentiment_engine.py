@@ -1,5 +1,6 @@
 import os
-from huggingface_hub import InferenceClient
+import time
+import requests
 
 
 class SentimentEngine:
@@ -8,45 +9,37 @@ class SentimentEngine:
         Finance-domain sentiment via Hugging Face's free Inference API,
         instead of loading FinBERT locally.
 
-        CHANGED: this used to load ProsusAI/finbert in-process via
-        transformers.pipeline(), which needs ~440MB+ of RAM on top of an
-        already-loaded torch/transformers/sentence-transformers/faiss
-        stack — enough to OOM-crash a 512MB Render free-tier instance on
-        the first /analyze call (see main.py history). Hugging Face's
-        Inference API runs the same FinBERT model on THEIR servers; we
-        just send text over HTTP and get a label/score back. This removes
-        FinBERT's memory footprint from our process entirely, at the cost
-        of a network call per request (and the free tier's own rate
-        limits — fine for a demo/portfolio app, not for high production
-        traffic).
+        CHANGED (again): the first version of this fix used
+        huggingface_hub's InferenceClient(provider="hf-inference", ...),
+        but the huggingface_hub version actually resolved/installed by pip
+        (pinned indirectly by sentence-transformers/transformers'
+        dependency ranges) predates the `provider` argument, causing:
+        TypeError: InferenceClient.__init__() got an unexpected keyword
+        argument 'provider' — crashing every /analyze call.
+        Sidestepped entirely by calling the HTTP inference endpoint
+        directly with `requests` (a dependency with no version coupling
+        to huggingface_hub at all), instead of going through the SDK.
+
+        This still removes FinBERT's ~440MB local memory footprint (the
+        original problem — see main.py history) since inference runs on
+        Hugging Face's servers, not this process.
 
         Requires an HF_TOKEN environment variable (a free Hugging Face
-        access token, "read" scope is enough — created at
+        access token, "read" scope — created at
         https://huggingface.co/settings/tokens, set as a Render
-        environment variable / secret). This does NOT require a paid
-        plan; that restriction only applies to hosting Spaces (Docker/
-        Gradio), not to calling the Inference API.
-
-        NOTE on model choice (unchanged from the original local-FinBERT
-        version): financial headlines are full of words that read as
-        negative in everyday English ("stumble", "misses", "drop",
-        "volatility") even when describing routine market activity — a
-        general-purpose sentiment model tends to misclassify almost
-        everything as NEGATIVE regardless of actual financial meaning.
-        FinBERT is trained specifically on financial text and doesn't
-        have that bias, so we still use it here — just remotely instead
-        of locally.
+        environment variable). This does NOT require a paid HF plan;
+        that restriction only applies to hosting Spaces (Docker/Gradio),
+        not to calling the Inference API.
         """
         print("Initializing Sentiment Engine (FinBERT via HF Inference API)...")
-        token = os.environ.get("HF_TOKEN")
-        if not token:
+        self.token = os.environ.get("HF_TOKEN")
+        if not self.token:
             print(
                 "WARNING: HF_TOKEN environment variable not set. "
                 "Sentiment analysis will fail and fall back to NEUTRAL for "
-                "every request until this is set (see Render/host env vars)."
+                "every request until this is set (see Render env vars)."
             )
-        self.client = InferenceClient(provider="hf-inference", api_key=token)
-        self.model = "ProsusAI/finbert"
+        self.api_url = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
         print("Sentiment Engine ready (remote).")
 
     def analyze(self, text):
@@ -58,13 +51,37 @@ class SentimentEngine:
         matched uppercase. Normalizing to uppercase here keeps that fix
         intact regardless of where the model actually runs.
         """
-        try:
-            results = self.client.text_classification(text, model=self.model)
-            top = results[0]  # highest-scoring label
-            return {
-                "label": str(top.label).upper(),
-                "score": float(top.score),
-            }
-        except Exception as e:
-            print(f"Sentiment Error (HF Inference API): {e}")
+        if not self.token:
             return {"label": "NEUTRAL", "score": 0.5}
+
+        headers = {"Authorization": f"Bearer {self.token}"}
+        payload = {"inputs": text}
+
+        for attempt in range(2):
+            try:
+                resp = requests.post(self.api_url, headers=headers, json=payload, timeout=15)
+                data = resp.json()
+
+                # A cold model on HF's side returns {"error": "...", "estimated_time": N}
+                # with a 503 while it loads — worth one short retry.
+                if isinstance(data, dict) and "error" in data:
+                    wait = data.get("estimated_time", 3)
+                    if attempt == 0:
+                        print(f"[sentiment] Model loading on HF's side, retrying in {wait:.1f}s...")
+                        time.sleep(min(wait, 10))
+                        continue
+                    raise RuntimeError(data["error"])
+
+                # Successful response shape: [[{"label": ..., "score": ...}, ...]]
+                # (a batch of 1 input -> list of per-class scores, sorted
+                # highest first).
+                scores = data[0] if isinstance(data, list) else data
+                top = scores[0]
+                return {
+                    "label": str(top["label"]).upper(),
+                    "score": float(top["score"]),
+                }
+            except Exception as e:
+                print(f"Sentiment Error (HF Inference API, attempt {attempt + 1}/2): {e}")
+
+        return {"label": "NEUTRAL", "score": 0.5}
