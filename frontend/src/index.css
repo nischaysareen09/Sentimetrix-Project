@@ -72,8 +72,22 @@ body {
   50%, 100% { opacity: 0; }
 }
 
+/* Scrolling ticker tape: two duplicated copies of the quote list side by
+   side, animated exactly -50% so the loop is seamless (see TickerTape.jsx
+   for the full explanation of the trick). Duration is deliberately long
+   (60s) -- a ticker tape should read as calm background motion, not race
+   past faster than anyone could read a price. */
+.ticker-tape-track {
+  animation: ticker-scroll 60s linear infinite;
+}
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .blink-cursor { animation: none; opacity: 1; }
+  .ticker-tape-track { animation: none; overflow-x: auto; }
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
 

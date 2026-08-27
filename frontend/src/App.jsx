@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import TickerTape from "./components/TickerTape";
 import TopBar from "./components/TopBar";
 import SignalReadout from "./components/SignalReadout";
 import DeepChart from "./components/DeepChart";
@@ -15,10 +16,6 @@ const App = () => {
   const [newsLoading, setNewsLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // /analyze doesn't need the frontend to fetch news first -- the backend
-  // has its own fallback that fetches the exact same cached news lookup
-  // server-side. Firing both at once roughly halves wall-clock time on a
-  // cold backend instead of summing two sequential requests.
   const runAnalysis = useCallback(async () => {
     const target = ticker.trim();
     if (!target) return;
@@ -57,6 +54,7 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-[var(--color-void)] text-[var(--color-text-primary)] flex flex-col font-sans">
+      <TickerTape />
       <TopBar ticker={ticker} onTickerChange={setTicker} onRun={runAnalysis} loading={loading} />
 
       <div className="flex flex-1 overflow-hidden">
